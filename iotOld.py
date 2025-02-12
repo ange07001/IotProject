@@ -79,7 +79,7 @@ def servoDeg(deg):
     return round(min_duty + (deg / 180) * (max_duty - min_duty))
 
 def shift(direction):
-    shiftUpDeg = 23
+    shiftUpDeg = 10
     shiftDownDeg = 150
     shiftMiddleDeg = 75
     if (direction == "up"):
@@ -134,6 +134,7 @@ while True:
         print("Internal Math Overflow Detected!")
         print("")
     """
+    shift("up")
     break
     
     """
