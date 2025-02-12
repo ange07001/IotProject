@@ -1,4 +1,9 @@
 # ------ Imports ------
+
+# Free memory
+import gc
+gc.collect()
+
 import time
 import board
 import busio as bus
@@ -6,6 +11,13 @@ import pwmio as pwm
 import digitalio as dio
 import analogio as aio
 from adafruit_ina219 import ADCResolution, BusVoltageRange, INA219
+import wifi
+import socketpool
+import adafruit_requests
+import adafruit_minimqtt.adafruit_minimqtt as MQTT
+from secrets import secrets
+from adafruit_io.adafruit_io import IO_MQTT
+import adafruit_ticks
 
 # ------ Functions ------
 
@@ -26,6 +38,20 @@ def initPin(boardPin, direction, pull=None):
             pin.pull = dio.Pull.DOWN
 
     return pin
+
+# Adafruit IO
+def sendData():
+    io.publish(BatAmp_FEED, powerSensorReading[2])
+    io.publish(BatPower_FEED, powerSensorReading[3])
+    io.publish(BatVolt_FEED, powerSensorReading[0])
+    # io.publish(GearEfficiency_FEED,)
+    io.publish(MotorRPM_FEED, motorAverageRpm)
+    io.publish(OutRPM_FEED, outAverageRpm)
+    # io.publish(MotorPWM_FEED,)
+    # io.publish(MotorGear_FEED,) 
+    # io.publish(Vibration_FEED, vibrationVal) 
+    
+    gc.collect()
 
 # RPM measurement
 def updateRpmHistory(newValue, historyList):
@@ -109,6 +135,39 @@ def measureINA219(sensor):
             
 # ------ Definitions ------
 
+# WiFi
+WIFI_SSID = secrets["ssid"]
+WIFI_PASSWORD = secrets["password"]
+
+# Adafruit IO
+AIO_USERNAME = secrets["aio_username"]
+AIO_KEY = secrets["aio_key"]
+
+# Adafruit IO Feeds
+BatAmp_FEED = "battery-amperage"
+BatPower_FEED = "battery-power"
+BatVolt_FEED = "battery-voltage"
+GearEfficiency_FEED = "gearbox-efficiency"
+MotorRPM_FEED = "motor-rpm"
+OutRPM_FEED = "output-rpm"
+MotorPWM_FEED = "motor-pwm"
+MotorGear_FEED = "motor-gear"
+Vibration_FEED = "vibration"
+
+# MQTT
+pool = socketpool.SocketPool(wifi.radio)
+requests = adafruit_requests.Session(pool)
+
+mqtt_client = MQTT.MQTT(
+    broker="io.adafruit.com",
+    port=1883,
+    username=AIO_USERNAME,
+    password=AIO_KEY,
+    socket_pool=pool,
+    ssl_context=None
+)
+
+
 # Time
 programStartTime = time.monotonic()
 
@@ -184,14 +243,32 @@ powerReadDelay = 1
 nextVibrationReadTime = programStartTime
 vibrationReadDelay = 1
 
+# Send Data to Adafruit IO
+nextSendDataTime = programStartTime + 1
+sendDataDelay = 15
+
+# ------ Setup ------
+
+# WiFi
+print("Connecting to WiFi....")
+wifi.radio.connect(WIFI_SSID, WIFI_PASSWORD)
+print(f"Connected to WiFi! IP address: {wifi.radio.ipv4_address}")
+
+# Adafruit IO and MQTT
+io = IO_MQTT(mqtt_client)
+
+print("Connecting to Adafruit IO....")
+io.connect()
+print("Connected to Adafruit IO!")
+
+# Servo and motor
 servo.duty_cycle = servoDeg(shiftMiddleDeg)
-time.sleep(3)
+time.sleep(1.5)
 motor(100,"f")
 
 # ------ Loop ------
 while True:   
         currentTime = time.monotonic()
-        
         
         # Measure RPM
         
@@ -259,7 +336,7 @@ while True:
         if currentTime - nextPowerReadTime >= 0: # Runs repetedly with a delay
             powerSensorReading = measureINA219(ina219)
             if powerSensorReading[0] <= 9.6:
-                print("--- WARNING ---")
+                print("------ WARNING ------")
                 print(f"Critical low battery voltage: {powerSensorReading[0]}")
                 break
             nextPowerReadTime = currentTime + powerReadDelay
@@ -267,7 +344,7 @@ while True:
         
         # Vibration
         if currentTime - nextVibrationReadTime >= 0: # Runs repetedly with a delay
-            vibrationVal = vibrationSensor.value
+            vibrationVal = vibrationSensor.value # ToDo: FIX THIS
             nextVibrationReadTime = currentTime + vibrationReadDelay
         
         # Motors 
@@ -290,5 +367,8 @@ while True:
             print(f"Output RPM: {outRpm}")
             print(f"Output average RPM: {outAverageRpm}")
             nextPrintTime = currentTime + printDelay
-            
         
+        # Send Data
+        if (currentTime - nextSendDataTime) >= 0:
+            sendData()
+            nextSendDataTime = currentTime + sendDataDelay
