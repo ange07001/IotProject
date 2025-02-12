@@ -1,52 +1,84 @@
-# imports
+# ------ Imports ------
 import time
 import board
 import busio as bus
 import pwmio as pwm
-import digitalio as io
+import digitalio as dio
+import analogio as aio
 from adafruit_ina219 import ADCResolution, BusVoltageRange, INA219
 
+# ------ Functions ------
 
-# functions
-def initPin(pin, direction, pull=None):
+# Other
+def initPin(boardPin, direction, pull=None):
 
-    dio = io.DigitalInOut(pin)
+    pin = dio.DigitalInOut(boardPin)
 
     if direction == 'output':
-        dio.direction = io.Direction.OUTPUT
+        pin.direction = dio.Direction.OUTPUT
     elif direction == 'input':
-        dio.direction = io.Direction.INPUT
+        pin.direction = dio.Direction.INPUT
 
 
         if pull == 'up':
-            dio.pull = io.Pull.UP
+            pin.pull = dio.Pull.UP
         elif pull == 'down':
-            dio.pull = io.Pull.DOWN
+            pin.pull = dio.Pull.DOWN
 
-    return dio
+    return pin
 
-def motor(motor, speed, direction, debug = False):
+# RPM measurement
+def updateRpmHistory(newValue, historyList):
+    historyList.append(newValue)
+    
+    if len(historyList) > rpmHistoryLength:
+        historyList.pop(0)
+
+def getAverageRpm(historyList):
+    if len(historyList) == 0:
+        return 0
+    return round(sum(historyList)/len(historyList))
+
+# Servo
+def servoDeg(deg):
+    min_duty = 1638 
+    max_duty = 8192 
+    return round(min_duty + (deg / 180) * (max_duty - min_duty))
+
+def shiftUp():
+    global servoTarget, isShifting, shiftStartTime, isShiftDelay
+    if not isShiftDelay:
+        servoTarget = shiftUpDeg
+        isShifting = True
+        shiftStartTime = time.monotonic()
+
+def shiftDown():
+    global servoTarget, isShifting, shiftStartTime, isShiftDelay
+    if not isShiftDelay:
+        servoTarget = shiftDownDeg
+        isShifting = True
+        shiftStartTime = time.monotonic()
+
+# Motor
+def motor(speed, direction, debug = False):
 
     pwmSpeed = round((speed/100)*65535)
 
-    if(motor == 1):
-        en1.duty_cycle = pwmSpeed
-        if(direction == "f"):
-            in1.value = True
-            in2.value = False
-        elif(direction == "r"):
-            in1.value = False
-            in2.value = True
-    elif(motor == 2):
-        en2.duty_cycle = pwmSpeed
-        if(direction == "f"):
-            in3.value = True
-            in4.value = False
-        elif(direction == "r"):
-            in3.value = False
-            in4.value = True
+    
+    en1.duty_cycle = pwmSpeed
+    en2.duty_cycle = pwmSpeed
+    if(direction == "f"):
+        in1.value = True
+        in2.value = False
+        in3.value = True
+        in4.value = False
+    elif(direction == "r"):
+        in1.value = False
+        in2.value = True
+        in3.value = False
+        in4.value = True
 
-    if(bool(debug) == True):
+    if debug:
         print(f"""
         en1: {en1.duty_cycle}
         en2: {en2.duty_cycle}
@@ -56,43 +88,31 @@ def motor(motor, speed, direction, debug = False):
         in4: {in4.value}
         """)
         
-def motorStop(motor):
-    if (motor == 1):
+def motorStop(debug = False):
         en1.duty_cycle = 0
+        en2.duty_cycle = 0
         in1.value = False
         in2.value = False
-    elif (motor == 2):
-        en2.duty_cycle = 0
         in3.value = False
         in4.value = False
         
+        if debug:
+            print("Motors are stopped")
+            
+# Power sensor
 def measureINA219(sensor):
     bus_voltage = sensor.bus_voltage  # voltage on V- (load side)
     shunt_voltage = sensor.shunt_voltage  # voltage between V+ and V- across the shunt
     current = sensor.current  # current in mA
     power = sensor.power  # power in watts
     return (bus_voltage,shunt_voltage,current,power)
+            
+# ------ Definitions ------
 
-def servoDeg(deg):
-    min_duty = 1638 
-    max_duty = 8192 
-    return round(min_duty + (deg / 180) * (max_duty - min_duty))
+# Time
+programStartTime = time.monotonic()
 
-def shift(direction):
-    shiftUpDeg = 23
-    shiftDownDeg = 150
-    shiftMiddleDeg = 75
-    if (direction == "up"):
-        servo.duty_cycle = (shiftUpDeg)
-        time.sleep(0.2)
-        servo.duty_cycle = servoDeg(shiftMiddleDeg)
-    elif (direction == "down"):
-        servo.duty_cycle = servoDeg(shiftDownDeg)
-        time.sleep(0.2)
-        servo.duty_cycle = servoDeg(shiftMiddleDeg)
-
-        
-# define pins and initialize
+# Motor
 en1 = pwm.PWMOut(board.GP21, frequency=5000, duty_cycle=0)
 en2 = pwm.PWMOut(board.GP20, frequency=5000, duty_cycle=0)
 
@@ -101,51 +121,174 @@ in2 = initPin(board.GP18, "output")
 in3 = initPin(board.GP17, "output")
 in4 = initPin(board.GP16, "output")
 
-vibrationSensor = initPin(board.GP15, "input")
+# Servo
+servo = pwm.PWMOut(board.GP14, frequency=50, duty_cycle=servoDeg(83))
 
+# Power sensor
 i2c_bus = bus.I2C(board.GP5,board.GP4)
-
 ina219 = INA219(i2c_bus)
 
-servo = pwm.PWMOut(board.GP14, frequency=50, duty_cycle=servoDeg(75))
-
-
-# setup INA219
 ina219.bus_adc_resolution = ADCResolution.ADCRES_12BIT_32S
 ina219.shunt_adc_resolution = ADCResolution.ADCRES_12BIT_32S
 ina219.bus_voltage_range = BusVoltageRange.RANGE_16V
 
-# program loop
-while True:
-    """sensorReading = measureINA219(ina219)
-    
-    if vibrationSensor.value:
-        print("Vibration Detected")
-    
-    print("Voltage (VIN+) : {:6.3f}   V".format(sensorReading[0] + sensorReading[1]))
-    print("Voltage (VIN-) : {:6.3f}   V".format(sensorReading[0]))
-    print("Shunt Voltage  : {:8.5f} V".format(sensorReading[1]))
-    print("Shunt Current  : {:7.4f}  A".format(sensorReading[2] / 1000))
-    print("Power Register : {:6.3f}   W".format(sensorReading[3]))
-    print("")
+# Vibration sensor
+vibrationSensor = initPin(board.GP15, "input")
 
-    
-    if ina219.overflow:
-        print("Internal Math Overflow Detected!")
-        print("")
-    """
-    motor(1,100,"f",True)
-    motor(2,100,"f",True)
-    
-    time.sleep(10)
-    motorStop(1)
-    motorStop(2)
-    break
-    
-    """
-    if (float(sensorReading[0]) <= 9.6):
-        print("VOLTAGE LOW! SHUTTING DOWN")
-        motor(1,0,"f",True)
-        motor(2,0,"f",True)
-        break"""
-    
+# Hall effect sensor connected to motor
+hallMotor = aio.AnalogIn(board.GP28)
+
+# Hall effect sensor connected to output
+hallOut = aio.AnalogIn(board.GP27)
+
+# ------ Variables ------
+
+# Hall effect general
+hallTriggerVal = 20000
+rpmHistoryLength = 100
+
+# Hall effect sensor to motor
+motorRpm = 0
+hallMotorTriggered = False
+hallMotorMoved = False
+hallMotorStartTime = None # Init
+motorLastRpmUpdate = programStartTime # Track last RPM update
+motorRpmHistory = []
+
+# Hall effect sensor to output
+outRpm = 0
+hallOutTriggered = False
+hallOutMoved = False
+hallOutStartTime = None # Init
+outLastRpmUpdate = programStartTime  # Track last RPM update
+outRpmHistory = []
+
+# Servo
+shiftUpDeg = 23
+shiftDownDeg = 150
+shiftMiddleDeg = 83
+servoTarget = shiftMiddleDeg
+isShifting = False
+isShiftDelay = False
+shiftStartTime = None
+
+# Print Values
+nextPrintTime = programStartTime
+printDelay = 1
+
+# Power Sensor
+nextPowerReadTime = programStartTime
+powerReadDelay = 1
+
+# Vibration Sensor
+nextVibrationReadTime = programStartTime
+vibrationReadDelay = 1
+
+servo.duty_cycle = servoDeg(shiftMiddleDeg)
+time.sleep(3)
+motor(100,"f")
+
+# ------ Loop ------
+while True:   
+        currentTime = time.monotonic()
+        
+        
+        # Measure RPM
+        
+        # Hall effect for motor
+        if hallMotor.value <= hallTriggerVal:
+            if not hallMotorTriggered: # Runs once per measurement to begin measuring time
+                hallMotorStartTime = time.monotonic_ns() # Registers time that we hit first magnet
+                hallMotorTriggered = True
+            
+            if hallMotorTriggered and hallMotorMoved and hallMotorStartTime is not None:
+                hallMotorStopTime = time.monotonic_ns() # Registers time that we hit second magnet
+                motorElapsedTime = (hallMotorStopTime - hallMotorStartTime) / 1e9 # Elapsed time in seconds
+                
+                if motorElapsedTime > 0:
+                    if round(60 / (motorElapsedTime * 4)) < 700: # Filters out unrealistic values
+                        motorRpm = round(60 / (motorElapsedTime * 4)) # *4 cause we have 4 magnets per revolution
+                        motorLastRpmUpdate = time.monotonic() # Set last time we got a RPM update
+                
+                hallMotorTriggered = False # Reset flags
+                hallMotorMoved = False
+        else:
+            hallMotorMoved = True
+            
+        if (currentTime - motorLastRpmUpdate) >= 1:
+            motorRpm = 0 # Set RPM to zero if too long since update
+            
+        updateRpmHistory(motorRpm, motorRpmHistory) # Used to calculate average rpm
+        
+        # Hall effect for output
+        if hallOut.value <= hallTriggerVal:
+            if not hallOutTriggered: # Runs once per measurement to begin measuring time
+                hallOutStartTime = time.monotonic_ns() # Registers time that we hit first magnet
+                hallOutTriggered = True
+            
+            if hallOutTriggered and hallOutMoved and hallOutStartTime is not None:
+                hallOutStopTime = time.monotonic_ns() # Registers time that we hit second magnet
+                outElapsedTime = (hallOutStopTime - hallOutStartTime) / 1e9 # Elapsed time in seconds
+                
+                if outElapsedTime > 0:
+                    if round(60 / (outElapsedTime * 4)) < 700: # Filters out unrealistic values
+                        outRpm = round(60 / (outElapsedTime * 4)) # *4 cause we have 4 magnets per revolution
+                        outLastRpmUpdate = time.monotonic() # Set last time we got a RPM update
+                
+                hallOutTriggered = False # Reset flags
+                hallOutMoved = False
+        else:
+            hallOutMoved = True
+            
+        if (currentTime - outLastRpmUpdate) >= 1:
+            outRpm = 0 # Set RPM to zero if too long since update
+            
+        updateRpmHistory(outRpm, outRpmHistory) # Used to calculate average rpm
+            
+        # Shifting
+        servo.duty_cycle = servoDeg(servoTarget)
+
+        if isShifting and (currentTime - shiftStartTime) >= 0.3: # Delay to give the servo time to move
+            servoTarget = shiftMiddleDeg
+            isShifting = False
+            isShiftDelay = True
+        elif isShiftDelay and (currentTime - shiftStartTime) >= 0.7: # Cooldown to prevent dubble shifting
+            isShiftDelay = False
+
+        # Power
+        if currentTime - nextPowerReadTime >= 0: # Runs repetedly with a delay
+            powerSensorReading = measureINA219(ina219)
+            if powerSensorReading[0] <= 9.6:
+                print("--- WARNING ---")
+                print(f"Critical low battery voltage: {powerSensorReading[0]}")
+                break
+            nextPowerReadTime = currentTime + powerReadDelay
+        
+        
+        # Vibration
+        if currentTime - nextVibrationReadTime >= 0: # Runs repetedly with a delay
+            vibrationVal = vibrationSensor.value
+            nextVibrationReadTime = currentTime + vibrationReadDelay
+        
+        # Motors 
+        if currentTime - programStartTime >= 30: # Stops motor and exits
+            motorStop()
+            break
+
+        # Servo
+
+        
+        # Print
+        if currentTime - nextPrintTime >= 0:
+            motorAverageRpm = getAverageRpm(motorRpmHistory)
+            outAverageRpm = getAverageRpm(outRpmHistory)
+            print(f"Battery Voltage: {powerSensorReading[0]}")
+            print(f"Servo target:  {servoTarget}")
+            print(f"Vibration: {vibrationVal}")
+            print(f"Motor RPM: {motorRpm}")
+            print(f"Motor average RPM: {motorAverageRpm}")
+            print(f"Output RPM: {outRpm}")
+            print(f"Output average RPM: {outAverageRpm}")
+            nextPrintTime = currentTime + printDelay
+            
+        
