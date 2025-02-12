@@ -27,6 +27,18 @@ def initPin(boardPin, direction, pull=None):
 
     return pin
 
+# RPM measurement
+def updateRpmHistory(newValue, historyList):
+    historyList.append(newValue)
+    
+    if len(historyList) > rpmHistoryLength:
+        historyList.pop(0)
+
+def getAverageRpm(historyList):
+    if len(historyList) == 0:
+        return 0
+    return round(sum(historyList)/len(historyList))
+
 # Servo
 def servoDeg(deg):
     min_duty = 1638 
@@ -133,20 +145,23 @@ hallOut = aio.AnalogIn(board.GP27)
 
 # Hall effect general
 hallTriggerVal = 20000
+rpmHistoryLength = 100
 
 # Hall effect sensor to motor
-hallMotorRpm = 0
+motorRpm = 0
 hallMotorTriggered = False
 hallMotorMoved = False
-hallMotorStartTime = None
-motorLastRpmUpdate = programStartTime
+hallMotorStartTime = None # Init
+motorLastRpmUpdate = programStartTime # Track last RPM update
+motorRpmHistory = []
 
 # Hall effect sensor to output
-hallOutRpm = 0
+outRpm = 0
 hallOutTriggered = False
 hallOutMoved = False
-hallOutStartTime = None  # Init
+hallOutStartTime = None # Init
 outLastRpmUpdate = programStartTime  # Track last RPM update
+outRpmHistory = []
 
 # Servo
 shiftUpDeg = 23
@@ -157,15 +172,22 @@ isShifting = False
 isShiftDelay = False
 shiftStartTime = None
 
-# Print
+# Print Values
 nextPrintTime = programStartTime
 printDelay = 1
 
-notShifted = True
+# Power Sensor
+nextPowerReadTime = programStartTime
+powerReadDelay = 1
+
+# Vibration Sensor
+nextVibrationReadTime = programStartTime
+vibrationReadDelay = 1
 
 servo.duty_cycle = servoDeg(shiftMiddleDeg)
 time.sleep(3)
 motor(100,"f")
+
 # ------ Loop ------
 while True:   
         currentTime = time.monotonic()
@@ -184,8 +206,8 @@ while True:
                 motorElapsedTime = (hallMotorStopTime - hallMotorStartTime) / 1e9 # Elapsed time in seconds
                 
                 if motorElapsedTime > 0:
-                    if round(60 / (motorElapsedTime * 4)) < 700:
-                        hallMotorRpm = round(60 / (motorElapsedTime * 4)) # *4 cause we have 4 magnets per revolution
+                    if round(60 / (motorElapsedTime * 4)) < 700: # Filters out unrealistic values
+                        motorRpm = round(60 / (motorElapsedTime * 4)) # *4 cause we have 4 magnets per revolution
                         motorLastRpmUpdate = time.monotonic() # Set last time we got a RPM update
                 
                 hallMotorTriggered = False # Reset flags
@@ -194,7 +216,10 @@ while True:
             hallMotorMoved = True
             
         if (currentTime - motorLastRpmUpdate) >= 1:
-            hallMotorRpm = 0 # Set RPM to zero if too long since update
+            motorRpm = 0 # Set RPM to zero if too long since update
+            
+        updateRpmHistory(motorRpm, motorRpmHistory) # Used to calculate average rpm
+        
         # Hall effect for output
         if hallOut.value <= hallTriggerVal:
             if not hallOutTriggered: # Runs once per measurement to begin measuring time
@@ -206,8 +231,8 @@ while True:
                 outElapsedTime = (hallOutStopTime - hallOutStartTime) / 1e9 # Elapsed time in seconds
                 
                 if outElapsedTime > 0:
-                    if round(60 / (outElapsedTime * 4)) < 700:
-                        hallOutRpm = round(60 / (outElapsedTime * 4)) # *4 cause we have 4 magnets per revolution
+                    if round(60 / (outElapsedTime * 4)) < 700: # Filters out unrealistic values
+                        outRpm = round(60 / (outElapsedTime * 4)) # *4 cause we have 4 magnets per revolution
                         outLastRpmUpdate = time.monotonic() # Set last time we got a RPM update
                 
                 hallOutTriggered = False # Reset flags
@@ -216,42 +241,54 @@ while True:
             hallOutMoved = True
             
         if (currentTime - outLastRpmUpdate) >= 1:
-            hallOutRpm = 0 # Set RPM to zero if too long since update
+            outRpm = 0 # Set RPM to zero if too long since update
+            
+        updateRpmHistory(outRpm, outRpmHistory) # Used to calculate average rpm
             
         # Shifting
         servo.duty_cycle = servoDeg(servoTarget)
 
-        if isShifting and (currentTime - shiftStartTime) >= 0.3:
+        if isShifting and (currentTime - shiftStartTime) >= 0.3: # Delay to give the servo time to move
             servoTarget = shiftMiddleDeg
             isShifting = False
             isShiftDelay = True
-        elif isShiftDelay and (currentTime - shiftStartTime) >= 0.7:
+        elif isShiftDelay and (currentTime - shiftStartTime) >= 0.7: # Cooldown to prevent dubble shifting
             isShiftDelay = False
 
         # Power
-        if currentTime - nextPrintTime >= printDelay:
+        if currentTime - nextPowerReadTime >= 0: # Runs repetedly with a delay
             powerSensorReading = measureINA219(ina219)
+            if powerSensorReading[0] <= 9.6:
+                print("--- WARNING ---")
+                print(f"Critical low battery voltage: {powerSensorReading[0]}")
+                break
+            nextPowerReadTime = currentTime + powerReadDelay
+        
         
         # Vibration
-        vibrationVal = vibrationSensor.value
+        if currentTime - nextVibrationReadTime >= 0: # Runs repetedly with a delay
+            vibrationVal = vibrationSensor.value
+            nextVibrationReadTime = currentTime + vibrationReadDelay
         
-        # Motors
-
-
-        """if (currentTime - programStartTime) >= 5 and notShifted:
-            shiftUp()
-            notShifted = False
-        """
-        if currentTime - programStartTime >= 15:
+        # Motors 
+        if currentTime - programStartTime >= 30: # Stops motor and exits
             motorStop()
+            break
+
+        # Servo
+
         
         # Print
-        if currentTime - nextPrintTime >= printDelay:
-            print(f"Battery Voltage: ")
+        if currentTime - nextPrintTime >= 0:
+            motorAverageRpm = getAverageRpm(motorRpmHistory)
+            outAverageRpm = getAverageRpm(outRpmHistory)
+            print(f"Battery Voltage: {powerSensorReading[0]}")
             print(f"Servo target:  {servoTarget}")
-            print(f"Vibration: ")
-            print(f"Motor RPM: {hallMotorRpm}")
-            print(f"Output RPM: {hallOutRpm}")
+            print(f"Vibration: {vibrationVal}")
+            print(f"Motor RPM: {motorRpm}")
+            print(f"Motor average RPM: {motorAverageRpm}")
+            print(f"Output RPM: {outRpm}")
+            print(f"Output average RPM: {outAverageRpm}")
             nextPrintTime = currentTime + printDelay
             
         
