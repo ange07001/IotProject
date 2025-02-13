@@ -286,6 +286,7 @@ while True:
                     if round(60 / (motorElapsedTime * 4)) < 700: # Filters out unrealistic values
                         motorRpm = round(60 / (motorElapsedTime * 4)) # *4 cause we have 4 magnets per revolution
                         motorLastRpmUpdate = time.monotonic() # Set last time we got a RPM update
+                        updateRpmHistory(motorRpm, motorRpmHistory) # Used to calculate average rpm
                 
                 hallMotorTriggered = False # Reset flags
                 hallMotorMoved = False
@@ -294,8 +295,7 @@ while True:
             
         if (currentTime - motorLastRpmUpdate) >= 1:
             motorRpm = 0 # Set RPM to zero if too long since update
-            
-        updateRpmHistory(motorRpm, motorRpmHistory) # Used to calculate average rpm
+            updateRpmHistory(motorRpm, motorRpmHistory) # Used to calculate average rpm
         
         # Hall effect for output
         if hallOut.value <= hallTriggerVal:
@@ -311,6 +311,7 @@ while True:
                     if round(60 / (outElapsedTime * 4)) < 700: # Filters out unrealistic values
                         outRpm = round(60 / (outElapsedTime * 4)) # *4 cause we have 4 magnets per revolution
                         outLastRpmUpdate = time.monotonic() # Set last time we got a RPM update
+                        updateRpmHistory(outRpm, outRpmHistory) # Used to calculate average rpm
                 
                 hallOutTriggered = False # Reset flags
                 hallOutMoved = False
@@ -319,8 +320,7 @@ while True:
             
         if (currentTime - outLastRpmUpdate) >= 1:
             outRpm = 0 # Set RPM to zero if too long since update
-            
-        updateRpmHistory(outRpm, outRpmHistory) # Used to calculate average rpm
+            updateRpmHistory(outRpm, outRpmHistory) # Used to calculate average rpm
             
         # Shifting
         servo.duty_cycle = servoDeg(servoTarget)
