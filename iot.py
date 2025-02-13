@@ -47,11 +47,23 @@ def sendData():
     # io.publish(GearEfficiency_FEED,)
     io.publish(MotorRPM_FEED, motorAverageRpm)
     io.publish(OutRPM_FEED, outAverageRpm)
-    # io.publish(MotorPWM_FEED,)
     # io.publish(MotorGear_FEED,) 
-    # io.publish(Vibration_FEED, vibrationVal) 
+    io.publish(Vibration_FEED, int(vibrationVal)) 
     
     gc.collect()
+    
+def onMessage(client, feed_id, payload):
+    print(f"Received message on {feed_id}: {payload}")  # Debug print
+    if feed_id == MotorPWM_FEED:
+        try:
+            pwm_value = max(0, min(100, int(payload)))
+            print(f"Setting motor speed to {pwm_value}%")
+            motor(pwm_value, "f")
+        except ValueError:
+            print("Could not receive PWM from Adafruit IO")
+                
+def onConnect(client):
+    client.subscribe(MotorPWM_FEED)
 
 # RPM measurement
 def updateRpmHistory(newValue, historyList):
@@ -205,6 +217,7 @@ hallOut = aio.AnalogIn(board.GP27)
 # Hall effect general
 hallTriggerVal = 20000
 rpmHistoryLength = 100
+rpmTimeout = 2
 
 # Hall effect sensor to motor
 motorRpm = 0
@@ -245,7 +258,11 @@ vibrationReadDelay = 1
 
 # Send Data to Adafruit IO
 nextSendDataTime = programStartTime + 1
-sendDataDelay = 15
+sendDataDelay = 18
+
+# Receive Data from Adafruit IO
+nextReceiveDataTime = programStartTime + 2
+receiveDataDelay = 5
 
 # ------ Setup ------
 
@@ -256,6 +273,11 @@ print(f"Connected to WiFi! IP address: {wifi.radio.ipv4_address}")
 
 # Adafruit IO and MQTT
 io = IO_MQTT(mqtt_client)
+
+print("Subscribing to feeds...")
+io.on_connect = onConnect
+io.on_message = onMessage
+print("Done!")
 
 print("Connecting to Adafruit IO....")
 io.connect()
@@ -293,7 +315,7 @@ while True:
         else:
             hallMotorMoved = True
             
-        if (currentTime - motorLastRpmUpdate) >= 1:
+        if (currentTime - motorLastRpmUpdate) >= rpmTimeout:
             motorRpm = 0 # Set RPM to zero if too long since update
             updateRpmHistory(motorRpm, motorRpmHistory) # Used to calculate average rpm
         
@@ -318,7 +340,7 @@ while True:
         else:
             hallOutMoved = True
             
-        if (currentTime - outLastRpmUpdate) >= 1:
+        if (currentTime - outLastRpmUpdate) >= rpmTimeout:
             outRpm = 0 # Set RPM to zero if too long since update
             updateRpmHistory(outRpm, outRpmHistory) # Used to calculate average rpm
             
@@ -329,11 +351,11 @@ while True:
             servoTarget = shiftMiddleDeg
             isShifting = False
             isShiftDelay = True
-        elif isShiftDelay and (currentTime - shiftStartTime) >= 0.7: # Cooldown to prevent dubble shifting
+        elif isShiftDelay and (currentTime - shiftStartTime) >= 0.7: # Cooldown to prevent double shifting
             isShiftDelay = False
 
         # Power
-        if currentTime - nextPowerReadTime >= 0: # Runs repetedly with a delay
+        if currentTime - nextPowerReadTime >= 0: # Runs repeatedly with a delay
             powerSensorReading = measureINA219(ina219)
             if powerSensorReading[0] <= 9.6:
                 print("------ WARNING ------")
@@ -343,14 +365,14 @@ while True:
         
         
         # Vibration
-        if currentTime - nextVibrationReadTime >= 0: # Runs repetedly with a delay
+        if currentTime - nextVibrationReadTime >= 0: # Runs repeatedly with a delay
             vibrationVal = vibrationSensor.value # ToDo: FIX THIS
             nextVibrationReadTime = currentTime + vibrationReadDelay
         
         # Motors 
-        if currentTime - programStartTime >= 30: # Stops motor and exits
+        """if currentTime - programStartTime >= 30: # Stops motor and exits
             motorStop()
-            break
+            break"""
 
         # Servo
 
@@ -360,6 +382,7 @@ while True:
             motorAverageRpm = getAverageRpm(motorRpmHistory)
             outAverageRpm = getAverageRpm(outRpmHistory)
             print(f"Battery Voltage: {powerSensorReading[0]}")
+            print(f"Battery Amperage: {powerSensorReading[2]}")
             print(f"Servo target:  {servoTarget}")
             print(f"Vibration: {vibrationVal}")
             print(f"Motor RPM: {motorRpm}")
@@ -372,3 +395,11 @@ while True:
         if (currentTime - nextSendDataTime) >= 0:
             sendData()
             nextSendDataTime = currentTime + sendDataDelay
+            
+        # Receive Data
+        if (currentTime - nextReceiveDataTime) >= 0:
+            io.loop()
+            if not io.is_connected:
+                io.connect()
+            nextReceiveDataTime = currentTime + receiveDataDelay
+
