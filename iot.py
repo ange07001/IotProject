@@ -237,8 +237,8 @@ outRpmHistory = []
 
 # Servo
 shiftUpDeg = 23
-shiftDownDeg = 150
-shiftMiddleDeg = 83
+shiftDownDeg = 165
+shiftMiddleDeg = 75
 servoTarget = shiftMiddleDeg
 isShifting = False
 isShiftDelay = False
@@ -345,6 +345,7 @@ while True:
             updateRpmHistory(outRpm, outRpmHistory) # Used to calculate average rpm
             
         # Shifting
+        
         servo.duty_cycle = servoDeg(servoTarget)
 
         if isShifting and (currentTime - shiftStartTime) >= 0.3: # Delay to give the servo time to move
@@ -373,8 +374,6 @@ while True:
         """if currentTime - programStartTime >= 30: # Stops motor and exits
             motorStop()
             break"""
-
-        # Servo
 
         
         # Print
