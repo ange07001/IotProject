@@ -61,9 +61,20 @@ def onMessage(client, feed_id, payload):
             motor(pwm_value, "f")
         except ValueError:
             print("Could not receive PWM from Adafruit IO")
-                
+    elif feed_id == MotorGear_FEED:
+        command = payload.lower().strip()
+        if command == "up":
+            print("Shifting gearbox up")
+            shiftUp()
+        elif command == "down":
+            print("Shifting gearbox down")
+            shiftDown()
+        else:
+            print("Unknown gear command:", payload)
+
 def onConnect(client):
     client.subscribe(MotorPWM_FEED)
+    client.subscribe(MotorGear_FEED)
 
 # RPM measurement
 def updateRpmHistory(newValue, historyList):
@@ -237,12 +248,16 @@ outRpmHistory = []
 
 # Servo
 shiftUpDeg = 23
-shiftDownDeg = 165
-shiftMiddleDeg = 75
+shiftDownDeg = 180
+shiftMiddleDeg = 108
 servoTarget = shiftMiddleDeg
 isShifting = False
 isShiftDelay = False
 shiftStartTime = None
+
+nextShiftTime = programStartTime + 3
+shift = 0
+shiftDelay = 3
 
 # Print Values
 nextPrintTime = programStartTime
@@ -348,12 +363,19 @@ while True:
         
         servo.duty_cycle = servoDeg(servoTarget)
 
-        if isShifting and (currentTime - shiftStartTime) >= 0.3: # Delay to give the servo time to move
+        if isShifting and (currentTime - shiftStartTime) >= 0.5: # Delay to give the servo time to move
             servoTarget = shiftMiddleDeg
             isShifting = False
             isShiftDelay = True
-        elif isShiftDelay and (currentTime - shiftStartTime) >= 0.7: # Cooldown to prevent double shifting
+        elif isShiftDelay and (currentTime - shiftStartTime) >= 1: # Cooldown to prevent double shifting
             isShiftDelay = False
+            
+        if currentTime - nextShiftTime >= 0:
+            if shift < 5:
+                shiftUp()
+                shift +=1
+            nextShiftTime = currentTime + shiftDelay
+            
 
         # Power
         if currentTime - nextPowerReadTime >= 0: # Runs repeatedly with a delay
@@ -361,6 +383,7 @@ while True:
             if powerSensorReading[0] <= 9.6:
                 print("------ WARNING ------")
                 print(f"Critical low battery voltage: {powerSensorReading[0]}")
+                motorStop()
                 break
             nextPowerReadTime = currentTime + powerReadDelay
         
